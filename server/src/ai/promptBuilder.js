@@ -1,4 +1,4 @@
-export const PROMPT_VERSION = 'traffic-coordination-v1';
+export const PROMPT_VERSION = 'traffic-coordination-v3';
 
 const EXPECTED_VEHICLE_COUNT = 20;
 const VEHICLE_DIRECTIONS = ['NORTH', 'SOUTH', 'EAST', 'WEST'];
@@ -92,11 +92,27 @@ The application supplies the eligibleVehicleIds list. Never return GO or WAIT de
 
 Your decisions are recommendations only. You do not have authority to authorize physical vehicle movement. A deterministic safety validator independently evaluates all GO proposals before execution.
 
-Use waiting time, queue position, starvation risk, and repeated priority when considering fairness. Avoid repeatedly prioritizing one approach without a valid reason. Do not make random decisions. Seek throughput and avoid unnecessary waiting, and consider multiple compatible GO proposals only when the supplied information supports them. Never sacrifice safety for throughput. The current application may use temporary development restrictions; do not treat those as final traffic policy.
+Follow this decision procedure exactly:
+1. List every eligible vehicle and read all supplied occupancy, crossing, and compatibility facts.
+2. If occupancy.known is false, conflictInformation is absent or unavailable, or a supplied fact leaves a candidate's safety unsupported, return conservative WAIT decisions for the affected candidates.
+3. If occupancy.known is true, no vehicle is currently crossing, and conflictInformation.available is true, build candidate combinations from the explicit compatibility notes. A note that two vehicles are geometry-compatible is affirmative support to consider GO for both. A note that vehicles conflict means they must not both receive GO in this tick.
+4. Select a non-empty fair combination whenever the supplied facts establish at least one safe candidate or explicitly compatible combination. Consider compatible combinations, not isolated vehicles. Do not return all WAIT merely because some candidates conflict with each other.
+5. Use waiting time, queue position, starvation risk, and repeated priority to choose between otherwise safe combinations. Waiting time is a priority signal; it is not a reason to make that vehicle WAIT by default.
+6. Recommend GO for the selected compatible combination. Recommend WAIT only for a movement that conflicts with a crossing vehicle, conflicts with a selected GO movement, loses a documented fairness choice, or lacks required safety information. Use CONFLICT_CONCERN only for an actual supplied conflict, not as a generic default when other eligible vehicles exist.
 
-When information is incomplete or unavailable, do not invent facts. Be conservative and return WAIT where appropriate using an allowed reason code.
+Illustrative policy only: in a known-clear intersection, if one pair is explicitly compatible while each member conflicts with other candidates, select that compatible pair or another fair supported combination; do not make the whole set WAIT. Conversely, never infer a missing compatibility relationship, and return all WAIT when no safe movement can be established or information is incomplete. Your proposal remains subject to deterministic safety validation; never sacrifice safety for throughput. The current application may use temporary development restrictions; do not treat those as final traffic policy.
 
-Return JSON only, with no Markdown fences or explanatory prose. Return exactly the input tickId. Include exactly one decision for every eligibleVehicleId and no decisions for other vehicles. Each decision must use action GO or WAIT and one allowed reasonCode: PRIORITY, FAIRNESS, WAITING_TIME, CONFLICT_CONCERN, OCCUPIED_INTERSECTION, or DEFERRED. Do not add unsupported fields. If no vehicles are eligible, return an empty decisions array.`;
+Return JSON only, with no Markdown fences or explanatory prose. Return exactly the input tickId. Include exactly one decision for every eligibleVehicleId and no decisions for other vehicles. Each decision must use action GO or WAIT and one allowed reasonCode: PRIORITY, FAIRNESS, WAITING_TIME, CONFLICT_CONCERN, OCCUPIED_INTERSECTION, or DEFERRED. Do not add unsupported fields. If no vehicles are eligible, return an empty decisions array.
+
+The required JSON shape is exactly this template. decisions MUST be an array, never an object keyed by vehicle ID:
+{
+  "tickId": "the exact input tickId string",
+  "decisions": [
+    { "vehicleId": "one eligible vehicle ID", "action": "GO", "reasonCode": "PRIORITY" },
+    { "vehicleId": "another eligible vehicle ID", "action": "WAIT", "reasonCode": "CONFLICT_CONCERN" }
+  ]
+}
+Use one array object per eligible vehicle, with exactly vehicleId, action, and reasonCode in each object. The example values are illustrative only: use the supplied eligible IDs and facts for this tick.`;
 }
 
 export function buildDecisionPrompt(snapshot) {

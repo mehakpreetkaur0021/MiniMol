@@ -96,6 +96,25 @@ for (const vehicleId of ['V001', 'V011']) {
   });
 }
 
+let conflictingProposalVehicles = createVehicles();
+for (const vehicleId of ['V001', 'V011']) {
+  conflictingProposalVehicles = updateVehicle(conflictingProposalVehicles, vehicleId, {
+    route: 'STRAIGHT',
+    status: 'WAITING',
+    waitingTime: 30,
+    atStopLine: true,
+  });
+}
+
+let incompleteOccupancyVehicles = createVehicles();
+for (const vehicleId of ['V001', 'V011']) {
+  incompleteOccupancyVehicles = updateVehicle(incompleteOccupancyVehicles, vehicleId, {
+    status: 'WAITING',
+    waitingTime: 30,
+    atStopLine: true,
+  });
+}
+
 export const PROMPT_EXAMPLES = Object.freeze([
   {
     name: 'four-eligible-approaches',
@@ -105,14 +124,26 @@ export const PROMPT_EXAMPLES = Object.freeze([
       vehicles: fourApproachVehicles,
       eligibleVehicleIds: ['V001', 'V006', 'V011', 'V016'],
       occupancy: clearOccupancy,
+      conflictInformation: {
+        available: true,
+        source: 'deterministic simulation movement geometry; advisory only',
+        compatibilityNotes: [
+          'V001 conflicts with V006; do not recommend GO for both in this tick.',
+          'V001 and V011 are geometry-compatible and may be considered together.',
+          'V001 conflicts with V016; do not recommend GO for both in this tick.',
+          'V006 conflicts with V011; do not recommend GO for both in this tick.',
+          'V006 and V016 are geometry-compatible and may be considered together.',
+          'V011 and V016 are geometry-compatible and may be considered together.',
+        ],
+      },
     }),
     response: {
       tickId: 'example-four-eligible',
       decisions: [
-        { vehicleId: 'V001', action: 'WAIT', reasonCode: 'DEFERRED' },
+        { vehicleId: 'V001', action: 'GO', reasonCode: 'PRIORITY' },
         { vehicleId: 'V006', action: 'WAIT', reasonCode: 'CONFLICT_CONCERN' },
-        { vehicleId: 'V011', action: 'WAIT', reasonCode: 'CONFLICT_CONCERN' },
-        { vehicleId: 'V016', action: 'WAIT', reasonCode: 'FAIRNESS' },
+        { vehicleId: 'V011', action: 'GO', reasonCode: 'FAIRNESS' },
+        { vehicleId: 'V016', action: 'WAIT', reasonCode: 'CONFLICT_CONCERN' },
       ],
     },
   },
@@ -129,6 +160,11 @@ export const PROMPT_EXAMPLES = Object.freeze([
         occupiedZones: ['central-conflict-area'],
         dataSource: 'simulation',
       },
+      conflictInformation: {
+        available: true,
+        source: 'deterministic simulation movement geometry; advisory only',
+        compatibilityNotes: ['V006 conflicts with currently crossing V001.'],
+      },
     }),
     response: {
       tickId: 'example-crossing',
@@ -143,6 +179,11 @@ export const PROMPT_EXAMPLES = Object.freeze([
       vehicles: longWaitVehicles,
       eligibleVehicleIds: ['V001', 'V006'],
       occupancy: clearOccupancy,
+      conflictInformation: {
+        available: true,
+        source: 'deterministic simulation movement geometry; advisory only',
+        compatibilityNotes: ['V001 conflicts with V006; do not recommend GO for both in this tick.'],
+      },
     }),
     response: {
       tickId: 'example-long-wait',
@@ -194,7 +235,7 @@ export const PROMPT_EXAMPLES = Object.freeze([
       conflictInformation: {
         available: true,
         source: 'illustrative application input',
-        compatibilityNotes: ['The application supplied a preliminary compatibility note for V001 and V011; deterministic validation remains required.'],
+        compatibilityNotes: ['V001 and V011 are geometry-compatible and may be considered together.'],
       },
     }),
     response: {
@@ -202,6 +243,71 @@ export const PROMPT_EXAMPLES = Object.freeze([
       decisions: [
         { vehicleId: 'V001', action: 'GO', reasonCode: 'PRIORITY' },
         { vehicleId: 'V011', action: 'GO', reasonCode: 'WAITING_TIME' },
+      ],
+    },
+  },
+  {
+    name: 'conflicting-eligible-movements',
+    description: 'Two eligible routes conflict, so the response may select one but must not select both.',
+    snapshot: createSnapshot({
+      tickId: 'example-conflicting-eligible',
+      vehicles: conflictingProposalVehicles,
+      eligibleVehicleIds: ['V001', 'V011'],
+      occupancy: clearOccupancy,
+      conflictInformation: {
+        available: true,
+        source: 'deterministic simulation movement geometry; advisory only',
+        compatibilityNotes: ['V001 conflicts with V011; do not recommend GO for both in this tick.'],
+      },
+    }),
+    response: {
+      tickId: 'example-conflicting-eligible',
+      decisions: [
+        { vehicleId: 'V001', action: 'GO', reasonCode: 'PRIORITY' },
+        { vehicleId: 'V011', action: 'WAIT', reasonCode: 'CONFLICT_CONCERN' },
+      ],
+    },
+  },
+  {
+    name: 'incomplete-occupancy',
+    description: 'Incomplete occupancy data does not establish a safe movement, so conservative WAIT proposals are appropriate.',
+    snapshot: createSnapshot({
+      tickId: 'example-incomplete-occupancy',
+      vehicles: incompleteOccupancyVehicles,
+      eligibleVehicleIds: ['V001', 'V011'],
+      occupancy: {
+        known: false,
+        occupiedZones: [],
+        dataSource: 'simulation occupancy state incomplete',
+      },
+      conflictInformation: {
+        available: false,
+        source: 'deterministic simulation movement geometry; advisory only',
+        compatibilityNotes: ['Simulation occupancy state is incomplete, so movement compatibility is unavailable.'],
+      },
+    }),
+    response: {
+      tickId: 'example-incomplete-occupancy',
+      decisions: [
+        { vehicleId: 'V001', action: 'WAIT', reasonCode: 'OCCUPIED_INTERSECTION' },
+        { vehicleId: 'V011', action: 'WAIT', reasonCode: 'CONFLICT_CONCERN' },
+      ],
+    },
+  },
+  {
+    name: 'missing-compatibility-information',
+    description: 'Known-clear occupancy alone does not establish route compatibility, so no GO is proposed when compatibility information is missing.',
+    snapshot: createSnapshot({
+      tickId: 'example-missing-compatibility',
+      vehicles: compatibleProposalVehicles,
+      eligibleVehicleIds: ['V001', 'V011'],
+      occupancy: clearOccupancy,
+    }),
+    response: {
+      tickId: 'example-missing-compatibility',
+      decisions: [
+        { vehicleId: 'V001', action: 'WAIT', reasonCode: 'DEFERRED' },
+        { vehicleId: 'V011', action: 'WAIT', reasonCode: 'DEFERRED' },
       ],
     },
   },

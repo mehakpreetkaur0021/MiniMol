@@ -1,4 +1,5 @@
 import { INCOMING_LANES } from './intersectionGeometry.js';
+import { getMovementConflict } from './movementConflictGeometry.js';
 import { getInitialHeading, getPointOnPath, getRoutePath, getStopPoint } from './routeGeometry.js';
 import { SIMULATION_CONFIG } from './simulationConfig.js';
 import { VEHICLE_DIRECTIONS, VEHICLE_STATUSES } from './vehicleGenerator.js';
@@ -161,10 +162,6 @@ export function advanceSimulation(state, deltaSeconds) {
 }
 
 export function getEligibleVehicles(state) {
-  if (state.status !== SIMULATION_STATUSES.RUNNING) {
-    return [];
-  }
-
   return VEHICLE_DIRECTIONS.flatMap((incomingDirection) => {
     const firstQueuedVehicle = state.vehicles
       .filter((vehicle) => vehicle.incomingDirection === incomingDirection && vehicle.status !== VEHICLE_STATUSES.CROSSING && vehicle.status !== VEHICLE_STATUSES.EXITED)
@@ -176,46 +173,83 @@ export function getEligibleVehicles(state) {
   });
 }
 
-export function approveVehicleMovement(state, vehicleId) {
+export function startApprovedVehicleMovements(state, vehicleIds) {
   if (state.status !== SIMULATION_STATUSES.RUNNING) {
     return { accepted: false, reason: 'SIMULATION_NOT_RUNNING', state };
   }
 
-  if (state.vehicles.some((vehicle) => vehicle.status === VEHICLE_STATUSES.CROSSING)) {
-    return { accepted: false, reason: 'ANOTHER_VEHICLE_IS_CROSSING', state };
+  if (!Array.isArray(vehicleIds) || vehicleIds.length === 0) {
+    return { accepted: false, reason: 'NO_APPROVED_VEHICLES', state };
+  }
+  if (new Set(vehicleIds).size !== vehicleIds.length) {
+    return { accepted: false, reason: 'DUPLICATE_VEHICLE_ID', state };
   }
 
-  const vehicle = state.vehicles.find((item) => item.id === vehicleId);
-  if (!vehicle) {
-    return { accepted: false, reason: 'VEHICLE_NOT_FOUND', state };
+  const eligibleVehicleIds = new Set(getEligibleVehicles(state).map((vehicle) => vehicle.id));
+  const vehiclesToStart = [];
+  for (const vehicleId of vehicleIds) {
+    const vehicle = state.vehicles.find((item) => item.id === vehicleId);
+    if (!vehicle) {
+      return { accepted: false, reason: 'VEHICLE_NOT_FOUND', state };
+    }
+    if (!eligibleVehicleIds.has(vehicleId)) {
+      return { accepted: false, reason: 'VEHICLE_NOT_ELIGIBLE', state };
+    }
+    vehiclesToStart.push(vehicle);
   }
 
-  const isEligible = getEligibleVehicles(state).some((eligibleVehicle) => eligibleVehicle.id === vehicleId);
-  if (!isEligible) {
-    return { accepted: false, reason: 'VEHICLE_NOT_ELIGIBLE', state };
+  const crossingVehicles = state.vehicles.filter((vehicle) => vehicle.status === VEHICLE_STATUSES.CROSSING);
+  const movementsToCompare = [...crossingVehicles];
+  for (const vehicle of vehiclesToStart) {
+    if (!getMovementConflict(vehicle, vehicle).known) {
+      return { accepted: false, reason: 'MOVEMENT_GEOMETRY_UNAVAILABLE', state };
+    }
+
+    for (const movement of movementsToCompare) {
+      const conflict = getMovementConflict(vehicle, movement);
+      if (!conflict.known) {
+        return { accepted: false, reason: 'MOVEMENT_GEOMETRY_UNAVAILABLE', state };
+      }
+      if (conflict.conflicts) {
+        return { accepted: false, reason: 'MOVEMENT_CONFLICT', state };
+      }
+    }
+    movementsToCompare.push(vehicle);
   }
 
-  const path = getRoutePath(vehicle.incomingDirection, vehicle.route);
-  const startPoint = getPointOnPath(path, 0);
+  let startPoints;
+  try {
+    startPoints = new Map(vehiclesToStart.map((vehicle) => [
+      vehicle.id,
+      getPointOnPath(getRoutePath(vehicle.incomingDirection, vehicle.route), 0),
+    ]));
+  } catch {
+    return { accepted: false, reason: 'MOVEMENT_GEOMETRY_UNAVAILABLE', state };
+  }
 
   return {
     accepted: true,
+    startedVehicleIds: [...vehicleIds],
     state: {
       ...state,
       vehicles: state.vehicles.map((item) => (
-        item.id === vehicleId
+        startPoints.has(item.id)
           ? {
               ...item,
               status: VEHICLE_STATUSES.CROSSING,
               atStopLine: false,
               routeDistance: 0,
               speed: SIMULATION_CONFIG.crossingSpeed,
-              x: startPoint.x,
-              y: startPoint.y,
-              heading: startPoint.heading,
+              x: startPoints.get(item.id).x,
+              y: startPoints.get(item.id).y,
+              heading: startPoints.get(item.id).heading,
             }
           : item
       )),
     },
   };
+}
+
+export function approveVehicleMovement(state, vehicleId) {
+  return startApprovedVehicleMovements(state, [vehicleId]);
 }

@@ -57,6 +57,82 @@ test('system prompt establishes proposal-only authority and strict response rule
   assert.match(systemPrompt, /deterministic safety validator/i);
   assert.match(systemPrompt, /eligibleVehicleIds/);
   assert.match(systemPrompt, /Return JSON only/);
+  assert.match(systemPrompt, /Select a non-empty fair combination/i);
+  assert.match(systemPrompt, /Waiting time is a priority signal; it is not a reason to make that vehicle WAIT by default/i);
+  assert.match(systemPrompt, /geometry-compatible is affirmative support to consider GO for both/i);
+  assert.match(systemPrompt, /Do not return all WAIT merely because some candidates conflict with each other/i);
+  assert.match(systemPrompt, /CONFLICT_CONCERN only for an actual supplied conflict/i);
+  assert.match(systemPrompt, /decisions MUST be an array, never an object keyed by vehicle ID/i);
+  assert.match(systemPrompt, /"tickId": "the exact input tickId string"/);
+  assert.match(systemPrompt, /"vehicleId": "one eligible vehicle ID", "action": "GO", "reasonCode": "PRIORITY"/);
+});
+
+test('prompt fixtures require a known-clear compatible combination to be considered', () => {
+  const exampleByName = new Map(PROMPT_EXAMPLES.map((example) => [example.name, example]));
+  const liveExample = exampleByName.get('four-eligible-approaches');
+  const compatible = exampleByName.get('application-supplied-compatibility-note');
+  const conflicting = exampleByName.get('conflicting-eligible-movements');
+  const crossing = exampleByName.get('crossing-vehicle');
+  const fairness = exampleByName.get('long-waiting-vehicle');
+  const incomplete = exampleByName.get('incomplete-occupancy');
+  const missingCompatibility = exampleByName.get('missing-compatibility-information');
+
+  const liveVehicleFacts = Object.fromEntries(liveExample.snapshot.vehicles
+    .filter((vehicle) => liveExample.snapshot.eligibleVehicleIds.includes(vehicle.id))
+    .map((vehicle) => [vehicle.id, [vehicle.incomingDirection, vehicle.route]]));
+  assert.deepEqual(liveVehicleFacts, {
+    V001: ['NORTH', 'LEFT'],
+    V006: ['SOUTH', 'STRAIGHT'],
+    V011: ['EAST', 'RIGHT'],
+    V016: ['WEST', 'LEFT'],
+  });
+  assert.deepEqual(liveExample.snapshot.intersection.conflictInformation.compatibilityNotes, [
+    'V001 conflicts with V006; do not recommend GO for both in this tick.',
+    'V001 and V011 are geometry-compatible and may be considered together.',
+    'V001 conflicts with V016; do not recommend GO for both in this tick.',
+    'V006 conflicts with V011; do not recommend GO for both in this tick.',
+    'V006 and V016 are geometry-compatible and may be considered together.',
+    'V011 and V016 are geometry-compatible and may be considered together.',
+  ]);
+  const liveGoIds = liveExample.response.decisions
+    .filter((decision) => decision.action === 'GO')
+    .map((decision) => decision.vehicleId);
+  assert.equal(liveGoIds.length, 2);
+  assert.equal(liveGoIds.length < liveExample.snapshot.eligibleVehicleIds.length, true);
+  assert.equal(
+    liveExample.snapshot.intersection.conflictInformation.compatibilityNotes.some((note) => (
+      note === `${liveGoIds[0]} and ${liveGoIds[1]} are geometry-compatible and may be considered together.`
+      || note === `${liveGoIds[1]} and ${liveGoIds[0]} are geometry-compatible and may be considered together.`
+    )),
+    true,
+  );
+  assert.equal(
+    liveExample.snapshot.intersection.conflictInformation.compatibilityNotes.some((note) => (
+      note.startsWith(`${liveGoIds[0]} conflicts with ${liveGoIds[1]};`)
+      || note.startsWith(`${liveGoIds[1]} conflicts with ${liveGoIds[0]};`)
+    )),
+    false,
+  );
+  assert.match(buildDecisionPrompt(liveExample.snapshot), /geometry-compatible and may be considered together/);
+
+  assert.equal(compatible.response.decisions.filter((decision) => decision.action === 'GO').length, 2);
+  assert.match(buildDecisionPrompt(compatible.snapshot), /may be considered together/);
+
+  assert.equal(conflicting.response.decisions.filter((decision) => decision.action === 'GO').length, 1);
+  assert.match(buildDecisionPrompt(conflicting.snapshot), /do not recommend GO for both/);
+
+  assert.equal(crossing.response.decisions.every((decision) => decision.action === 'WAIT'), true);
+  assert.match(buildDecisionPrompt(crossing.snapshot), /currently crossing/);
+  assert.match(buildDecisionPrompt(crossing.snapshot), /conflicts with currently crossing/);
+
+  assert.equal(fairness.response.decisions.find((decision) => decision.vehicleId === 'V001').action, 'GO');
+  assert.equal(fairness.response.decisions.find((decision) => decision.vehicleId === 'V006').action, 'WAIT');
+
+  assert.equal(incomplete.snapshot.intersection.occupancy.known, false);
+  assert.equal(incomplete.response.decisions.every((decision) => decision.action === 'WAIT'), true);
+
+  assert.equal(missingCompatibility.snapshot.intersection.conflictInformation, undefined);
+  assert.equal(missingCompatibility.response.decisions.every((decision) => decision.action === 'WAIT'), true);
 });
 
 test('snapshot validation rejects missing metadata and vehicle contract violations', () => {
